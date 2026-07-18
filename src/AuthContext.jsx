@@ -8,15 +8,33 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Récupère la session existante au chargement de la page
     supabase.auth.getSession().then(({ data: { session } }) => {
+      // On réinjecte le token Spotify sauvegardé manuellement, s'il existe
+      const savedToken = localStorage.getItem('spotify_provider_token')
+      if (session && savedToken) {
+        session.provider_token = savedToken
+      }
       setSession(session)
       setLoading(false)
     })
 
-    // Écoute les changements (connexion, déconnexion) en temps réel
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
+        // À la connexion, Supabase fournit le vrai provider_token : on le sauvegarde
+        if (event === 'SIGNED_IN' && session?.provider_token) {
+          localStorage.setItem('spotify_provider_token', session.provider_token)
+        }
+
+        if (event === 'SIGNED_OUT') {
+          localStorage.removeItem('spotify_provider_token')
+        }
+
+        // On réinjecte le token sauvegardé si la session actuelle ne l'a pas
+        const savedToken = localStorage.getItem('spotify_provider_token')
+        if (session && savedToken && !session.provider_token) {
+          session.provider_token = savedToken
+        }
+
         setSession(session)
       }
     )
@@ -25,10 +43,16 @@ export function AuthProvider({ children }) {
   }, [])
 
   const loginWithSpotify = () => {
-    supabase.auth.signInWithOAuth({ provider: 'spotify' })
+    supabase.auth.signInWithOAuth({
+      provider: 'spotify',
+      options: {
+        scopes: 'user-read-email user-read-private',
+      },
+    })
   }
 
   const logout = () => {
+    localStorage.removeItem('spotify_provider_token')
     supabase.auth.signOut()
   }
 

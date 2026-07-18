@@ -8,11 +8,15 @@ function Lobby() {
   const { session } = useAuth()
   const [joueurs, setJoueurs] = useState([])
   const [sessionData, setSessionData] = useState(null)
+  const [monJoueurId, setMonJoueurId] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const [recherche, setRecherche] = useState('')
+  const [resultats, setResultats] = useState([])
+  const [mesMorceaux, setMesMorceaux] = useState([])
 
   useEffect(() => {
     async function init() {
-      // Récupère les infos de la session (thème, créateur, statut)
       const { data: sessionInfo } = await supabase
         .from('sessions')
         .select('*')
@@ -21,46 +25,59 @@ function Lobby() {
 
       setSessionData(sessionInfo)
 
-      // Ajoute l'utilisateur actuel comme joueur (ignoré si déjà présent)
+      const spotifyId = session.user.user_metadata.provider_id
+
+      // Tente d'ajouter le joueur (ignoré silencieusement si déjà présent, grâce à la contrainte unique)
       await supabase.from('joueurs').insert({
         session_id: sessionId,
         pseudo: session.user.user_metadata.full_name,
-        spotify_id: session.user.user_metadata.provider_id,
+        spotify_id: spotifyId,
       })
 
-      // Récupère la liste des joueurs
+      // Récupère la ligne du joueur (qu'elle vienne d'être créée ou qu'elle existait déjà)
+      const { data: monJoueur } = await supabase
+        .from('joueurs')
+        .select('id')
+        .eq('session_id', sessionId)
+        .eq('spotify_id', spotifyId)
+        .single()
+
+      setMonJoueurId(monJoueur?.id || null)
+
       const { data: liste } = await supabase
         .from('joueurs')
         .select('*')
         .eq('session_id', sessionId)
 
       setJoueurs(liste || [])
+
+      const { data: morceaux } = await supabase
+        .from('morceaux')
+        .select('*')
+        .eq('session_id', sessionId)
+        .eq('ajoute_par', monJoueur?.id)
+
+      setMesMorceaux(morceaux || [])
       setLoading(false)
     }
 
     if (session) init()
 
-    // Abonnement temps réel : nouveaux joueurs
     const channelJoueurs = supabase
       .channel(`joueurs-session-${sessionId}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
-        (payload) => {
-          setJoueurs((prev) => [...prev, payload.new])
-        }
+        (payload) => setJoueurs((prev) => [...prev, payload.new])
       )
       .subscribe()
 
-    // Abonnement temps réel : changement de statut de la session
     const channelSession = supabase
       .channel(`session-${sessionId}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` },
-        (payload) => {
-          setSessionData(payload.new)
-        }
+        (payload) => setSessionData(payload.new)
       )
       .subscribe()
 
@@ -71,10 +88,49 @@ function Lobby() {
   }, [sessionId, session])
 
   const demarrerSession = async () => {
-    await supabase
-      .from('sessions')
-      .update({ status: 'collecting' })
-      .eq('id', sessionId)
+    await supabase.from('sessions').update({ status: 'collecting' }).eq('id', sessionId)
+  }
+
+  const rechercherMorceaux = async (e) => {
+    e.preventDefault()
+    if (!recherche.trim()) return
+
+    const token = session.provider_token
+
+    const res = await fetch(
+      `https://api.spotify.com/v1/search?q=${encodeURIComponent(recherche)}&type=track&limit=5`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    const data = await res.json()
+    setResultats(data.tracks?.items || [])
+  }
+
+  const ajouterMorceau = async (track) => {
+    if (!monJoueurId) {
+      console.error('ID du joueur introuvable, impossible d\'ajouter le morceau.')
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('morceaux')
+      .insert({
+        session_id: sessionId,
+        ajoute_par: monJoueurId,
+        spotify_track_id: track.id,
+        titre: track.name,
+        artiste: track.artists.map((a) => a.name).join(', '),
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Erreur ajout morceau:', error)
+      return
+    }
+
+    setMesMorceaux((prev) => [...prev, data])
+    setResultats([])
+    setRecherche('')
   }
 
   if (loading || !sessionData) {
@@ -84,7 +140,7 @@ function Lobby() {
   const estCreateur = session.user.id === sessionData.created_by
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4">
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4">
       <h1 className="text-2xl font-bold">Lobby</h1>
       <p className="text-gray-400 text-sm">Thème : {sessionData.theme}</p>
       <p className="text-gray-400 text-sm">Statut : {sessionData.status}</p>
@@ -99,11 +155,54 @@ function Lobby() {
       {estCreateur && sessionData.status === 'lobby' && (
         <button
           onClick={demarrerSession}
-          className="bg-green-500 text-black px-6 py-2 rounded-full font-bold mt-4"
+          className="bg-green-500 text-black px-6 py-2 rounded-full font-bold cursor-pointer hover:bg-green-400 transition"
         >
           Démarrer
         </button>
       )}
+
+      {sessionData.status === 'collecting' && (
+        <div className="w-full max-w-md mt-4 flex flex-col gap-3">
+          <form onSubmit={rechercherMorceaux} className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Rechercher un morceau..."
+              value={recherche}
+              onChange={(e) => setRecherche(e.target.value)}
+              className="flex-1 px-4 py-2 rounded-full text-black bg-white"
+            />
+            <button
+              type="submit"
+              className="bg-white text-black px-4 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition"
+            >
+              🔍
+            </button>
+          </form>
+
+          {resultats.map((track) => (
+            <div key={track.id} className="flex justify-between items-center bg-gray-800 px-4 py-2 rounded-lg">
+              <span>{track.name} — {track.artists.map((a) => a.name).join(', ')}</span>
+              <button
+                onClick={() => ajouterMorceau(track)}
+                className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-green-400 transition"
+              >
+                Ajouter
+              </button>
+            </div>
+          ))}
+
+          <div className="mt-4">
+            <h3 className="text-lg">Mes morceaux ajoutés :</h3>
+            {mesMorceaux.map((m) => (
+              <p key={m.id} className="text-gray-300">{m.titre} — {m.artiste}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button className="text-gray-400 underline cursor-pointer hover:text-gray-200 transition mt-4">
+        Se déconnecter
+      </button>
     </div>
   )
 }
