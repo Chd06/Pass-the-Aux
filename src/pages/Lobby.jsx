@@ -17,6 +17,9 @@ function Lobby() {
   const [resultats, setResultats] = useState([])
   const [mesMorceaux, setMesMorceaux] = useState([])
 
+  const [morceauxVote, setMorceauxVote] = useState([])
+  const [mesVotes, setMesVotes] = useState({})
+
   useEffect(() => {
     async function init() {
       const { data: sessionInfo } = await supabase
@@ -87,8 +90,31 @@ function Lobby() {
     }
   }, [sessionId, session])
 
+  // Dès que le statut passe à "voting", on charge les morceaux à voter
+  useEffect(() => {
+    async function chargerMorceauxPourVote() {
+      // On ne sélectionne SURTOUT PAS "ajoute_par" ici, pour préserver l'anonymat
+      const { data } = await supabase
+        .from('morceaux')
+        .select('id, titre, artiste, spotify_track_id')
+        .eq('session_id', sessionId)
+
+      // On mélange l'ordre une seule fois avec un tri aléatoire
+      const melanges = [...(data || [])].sort(() => Math.random() - 0.5)
+      setMorceauxVote(melanges)
+    }
+
+    if (sessionData?.status === 'voting') {
+      chargerMorceauxPourVote()
+    }
+  }, [sessionData?.status, sessionId])
+
   const demarrerSession = async () => {
     await supabase.from('sessions').update({ status: 'collecting' }).eq('id', sessionId)
+  }
+
+  const passerAuVote = async () => {
+    await supabase.from('sessions').update({ status: 'voting' }).eq('id', sessionId)
   }
 
   const rechercherMorceaux = async (e) => {
@@ -106,15 +132,8 @@ function Lobby() {
   }
 
   const ajouterMorceau = async (track) => {
-    if (!monJoueurId) {
-      console.error('ID du joueur introuvable, impossible d\'ajouter le morceau.')
-      return
-    }
-
-    // Protection côté client : on vérifie la limite avant même d'appeler Supabase
-    if (mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR) {
-      return
-    }
+    if (!monJoueurId) return
+    if (mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR) return
 
     const { data, error } = await supabase
       .from('morceaux')
@@ -138,6 +157,26 @@ function Lobby() {
     setRecherche('')
   }
 
+  const voter = async (morceauId, suspectId) => {
+    setMesVotes((prev) => ({ ...prev, [morceauId]: suspectId }))
+
+    // "upsert" : insère le vote, ou le met à jour s'il existe déjà (grâce à la contrainte unique)
+    const { error } = await supabase
+      .from('votes')
+      .upsert(
+        {
+          morceau_id: morceauId,
+          votant_id: monJoueurId,
+          suppose_auteur_id: suspectId,
+        },
+        { onConflict: 'morceau_id,votant_id' }
+      )
+
+    if (error) {
+      console.error('Erreur vote:', error)
+    }
+  }
+
   if (loading || !sessionData) {
     return <div className="min-h-screen bg-black text-white flex items-center justify-center">Chargement...</div>
   }
@@ -146,7 +185,7 @@ function Lobby() {
   const limiteAtteinte = mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4">
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4 py-8">
       <h1 className="text-2xl font-bold">Lobby</h1>
       <p className="text-gray-400 text-sm">Thème : {sessionData.theme}</p>
       <p className="text-gray-400 text-sm">Statut : {sessionData.status}</p>
@@ -215,6 +254,37 @@ function Lobby() {
               <p key={m.id} className="text-gray-300">{m.titre} — {m.artiste}</p>
             ))}
           </div>
+
+          {estCreateur && (
+            <button
+              onClick={passerAuVote}
+              className="bg-white text-black px-6 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition mt-4"
+            >
+              Passer au vote
+            </button>
+          )}
+        </div>
+      )}
+
+      {sessionData.status === 'voting' && (
+        <div className="w-full max-w-md mt-4 flex flex-col gap-4">
+          <h2 className="text-lg text-center">Devine qui a ajouté quoi 🕵️</h2>
+
+          {morceauxVote.map((m) => (
+            <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg flex flex-col gap-2">
+              <span>{m.titre} — {m.artiste}</span>
+              <select
+                value={mesVotes[m.id] || ''}
+                onChange={(e) => voter(m.id, e.target.value)}
+                className="px-3 py-1 rounded text-black bg-white"
+              >
+                <option value="" disabled>Qui a ajouté ça ?</option>
+                {joueurs.map((j) => (
+                  <option key={j.id} value={j.id}>{j.pseudo}</option>
+                ))}
+              </select>
+            </div>
+          ))}
         </div>
       )}
 
