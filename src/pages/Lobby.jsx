@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom'
 import { useAuth } from '../AuthContext'
 import { supabase } from '../supabaseClient'
 
+const MAX_MORCEAUX_PAR_JOUEUR = 3
+
 function Lobby() {
   const { sessionId } = useParams()
   const { session } = useAuth()
@@ -27,14 +29,12 @@ function Lobby() {
 
       const spotifyId = session.user.user_metadata.provider_id
 
-      // Tente d'ajouter le joueur (ignoré silencieusement si déjà présent, grâce à la contrainte unique)
       await supabase.from('joueurs').insert({
         session_id: sessionId,
         pseudo: session.user.user_metadata.full_name,
         spotify_id: spotifyId,
       })
 
-      // Récupère la ligne du joueur (qu'elle vienne d'être créée ou qu'elle existait déjà)
       const { data: monJoueur } = await supabase
         .from('joueurs')
         .select('id')
@@ -111,6 +111,11 @@ function Lobby() {
       return
     }
 
+    // Protection côté client : on vérifie la limite avant même d'appeler Supabase
+    if (mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR) {
+      return
+    }
+
     const { data, error } = await supabase
       .from('morceaux')
       .insert({
@@ -138,6 +143,7 @@ function Lobby() {
   }
 
   const estCreateur = session.user.id === sessionData.created_by
+  const limiteAtteinte = mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4">
@@ -163,33 +169,45 @@ function Lobby() {
 
       {sessionData.status === 'collecting' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-3">
-          <form onSubmit={rechercherMorceaux} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Rechercher un morceau..."
-              value={recherche}
-              onChange={(e) => setRecherche(e.target.value)}
-              className="flex-1 px-4 py-2 rounded-full text-black bg-white"
-            />
-            <button
-              type="submit"
-              className="bg-white text-black px-4 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition"
-            >
-              🔍
-            </button>
-          </form>
+          <p className="text-sm text-gray-400 text-center">
+            {mesMorceaux.length} / {MAX_MORCEAUX_PAR_JOUEUR} morceaux ajoutés
+          </p>
 
-          {resultats.map((track) => (
-            <div key={track.id} className="flex justify-between items-center bg-gray-800 px-4 py-2 rounded-lg">
-              <span>{track.name} — {track.artists.map((a) => a.name).join(', ')}</span>
-              <button
-                onClick={() => ajouterMorceau(track)}
-                className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-green-400 transition"
-              >
-                Ajouter
-              </button>
-            </div>
-          ))}
+          {limiteAtteinte ? (
+            <p className="text-center text-green-400 font-bold">
+              Limite atteinte, tu ne peux plus ajouter de morceaux 🎉
+            </p>
+          ) : (
+            <>
+              <form onSubmit={rechercherMorceaux} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Rechercher un morceau..."
+                  value={recherche}
+                  onChange={(e) => setRecherche(e.target.value)}
+                  className="flex-1 px-4 py-2 rounded-full text-black bg-white"
+                />
+                <button
+                  type="submit"
+                  className="bg-white text-black px-4 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition"
+                >
+                  🔍
+                </button>
+              </form>
+
+              {resultats.map((track) => (
+                <div key={track.id} className="flex justify-between items-center bg-gray-800 px-4 py-2 rounded-lg">
+                  <span>{track.name} — {track.artists.map((a) => a.name).join(', ')}</span>
+                  <button
+                    onClick={() => ajouterMorceau(track)}
+                    className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-green-400 transition"
+                  >
+                    Ajouter
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
 
           <div className="mt-4">
             <h3 className="text-lg">Mes morceaux ajoutés :</h3>
