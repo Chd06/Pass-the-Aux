@@ -16,9 +16,6 @@ function Lobby() {
         pseudo: session.user.user_metadata.full_name,
         spotify_id: session.user.user_metadata.provider_id,
       })
-      // On ignore volontairement le résultat/erreur ici :
-      // si le joueur existe déjà, la contrainte unique de la base
-      // rejette l'insertion, et c'est très bien comme ça.
 
       const { data: liste } = await supabase
         .from('joueurs')
@@ -30,6 +27,21 @@ function Lobby() {
     }
 
     if (session) rejoindreSession()
+
+    const channel = supabase
+      .channel(`joueurs-session-${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
+        (payload) => {
+          setJoueurs((prev) => [...prev, payload.new])
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [sessionId, session])
 
   if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Chargement...</div>
