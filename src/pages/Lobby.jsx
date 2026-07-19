@@ -20,6 +20,9 @@ function Lobby() {
   const [morceauxVote, setMorceauxVote] = useState([])
   const [mesVotes, setMesVotes] = useState({})
 
+  const [resultatsReveal, setResultatsReveal] = useState([])
+  const [scores, setScores] = useState([])
+
   useEffect(() => {
     async function init() {
       const { data: sessionInfo } = await supabase
@@ -36,6 +39,7 @@ function Lobby() {
         session_id: sessionId,
         pseudo: session.user.user_metadata.full_name,
         spotify_id: spotifyId,
+        user_id: session.user.id,
       })
 
       const { data: monJoueur } = await supabase
@@ -90,16 +94,13 @@ function Lobby() {
     }
   }, [sessionId, session])
 
-  // Dès que le statut passe à "voting", on charge les morceaux à voter
   useEffect(() => {
     async function chargerMorceauxPourVote() {
-      // On ne sélectionne SURTOUT PAS "ajoute_par" ici, pour préserver l'anonymat
       const { data } = await supabase
         .from('morceaux')
         .select('id, titre, artiste, spotify_track_id')
         .eq('session_id', sessionId)
 
-      // On mélange l'ordre une seule fois avec un tri aléatoire
       const melanges = [...(data || [])].sort(() => Math.random() - 0.5)
       setMorceauxVote(melanges)
     }
@@ -109,12 +110,60 @@ function Lobby() {
     }
   }, [sessionData?.status, sessionId])
 
+  // Phase reveal : on peut enfin lire "ajoute_par" grâce à la policy RLS,
+  // et on calcule les scores de chacun
+  useEffect(() => {
+    async function chargerReveal() {
+      const { data: morceaux } = await supabase
+        .from('morceaux')
+        .select('id, titre, artiste, ajoute_par')
+        .eq('session_id', sessionId)
+
+      const { data: votes } = await supabase
+        .from('votes')
+        .select('*')
+        .in('morceau_id', (morceaux || []).map((m) => m.id))
+
+      // Associe chaque morceau à son vrai auteur (pseudo) + tous les votes reçus
+      const detaille = (morceaux || []).map((m) => ({
+        ...m,
+        votesPourCeMorceau: (votes || []).filter((v) => v.morceau_id === m.id),
+      }))
+      setResultatsReveal(detaille)
+
+      // Calcule le score de chaque joueur : nombre de bonnes devinettes
+      const scoreParJoueur = {}
+      joueurs.forEach((j) => { scoreParJoueur[j.id] = 0 })
+
+      ;(votes || []).forEach((v) => {
+        const morceau = (morceaux || []).find((m) => m.id === v.morceau_id)
+        if (morceau && v.suppose_auteur_id === morceau.ajoute_par) {
+          scoreParJoueur[v.votant_id] = (scoreParJoueur[v.votant_id] || 0) + 1
+        }
+      })
+
+      const classement = joueurs
+        .map((j) => ({ pseudo: j.pseudo, score: scoreParJoueur[j.id] || 0 }))
+        .sort((a, b) => b.score - a.score)
+
+      setScores(classement)
+    }
+
+    if (sessionData?.status === 'reveal' && joueurs.length > 0) {
+      chargerReveal()
+    }
+  }, [sessionData?.status, sessionId, joueurs])
+
   const demarrerSession = async () => {
     await supabase.from('sessions').update({ status: 'collecting' }).eq('id', sessionId)
   }
 
   const passerAuVote = async () => {
     await supabase.from('sessions').update({ status: 'voting' }).eq('id', sessionId)
+  }
+
+  const passerAuReveal = async () => {
+    await supabase.from('sessions').update({ status: 'reveal' }).eq('id', sessionId)
   }
 
   const rechercherMorceaux = async (e) => {
@@ -160,7 +209,6 @@ function Lobby() {
   const voter = async (morceauId, suspectId) => {
     setMesVotes((prev) => ({ ...prev, [morceauId]: suspectId }))
 
-    // "upsert" : insère le vote, ou le met à jour s'il existe déjà (grâce à la contrainte unique)
     const { error } = await supabase
       .from('votes')
       .upsert(
@@ -183,6 +231,8 @@ function Lobby() {
 
   const estCreateur = session.user.id === sessionData.created_by
   const limiteAtteinte = mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR
+
+  const pseudoDe = (joueurId) => joueurs.find((j) => j.id === joueurId)?.pseudo || '???'
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4 py-8">
@@ -285,6 +335,38 @@ function Lobby() {
               </select>
             </div>
           ))}
+
+          {estCreateur && (
+            <button
+              onClick={passerAuReveal}
+              className="bg-white text-black px-6 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition mt-4"
+            >
+              Voir les résultats
+            </button>
+          )}
+        </div>
+      )}
+
+      {sessionData.status === 'reveal' && (
+        <div className="w-full max-w-md mt-4 flex flex-col gap-6">
+          <div>
+            <h2 className="text-lg text-center mb-3">🏆 Classement</h2>
+            {scores.map((s, i) => (
+              <p key={s.pseudo} className="text-center">
+                {i + 1}. {s.pseudo} — {s.score} point{s.score > 1 ? 's' : ''}
+              </p>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <h2 className="text-lg text-center">Qui a ajouté quoi 🎉</h2>
+            {resultatsReveal.map((m) => (
+              <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg">
+                <p>{m.titre} — {m.artiste}</p>
+                <p className="text-green-400 font-bold">Ajouté par : {pseudoDe(m.ajoute_par)}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
