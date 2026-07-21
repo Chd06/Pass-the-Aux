@@ -4,7 +4,6 @@ import { Navigate } from 'react-router-dom'
 function Login() {
   const { session, loginWithSpotify } = useAuth()
 
-  // Si déjà connecté, redirige automatiquement vers l'accueil
   if (session) return <Navigate to="/" />
 
   return (
@@ -12,7 +11,7 @@ function Login() {
       <h1 className="text-4xl font-bold">Pass the Aux</h1>
       <button
         onClick={loginWithSpotify}
-        className="bg-green-500 text-black px-6 py-2 rounded-full font-bold"
+        className="bg-[#1DB954] text-black px-6 py-2 rounded-full font-bold cursor-pointer hover:bg-[#1ed760] transition"
       >
         Se connecter avec Spotify
       </button>

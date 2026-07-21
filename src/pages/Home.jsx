@@ -42,7 +42,7 @@ function Home() {
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4">
       <h1 className="text-2xl">Connecté en tant que {session.user.email}</h1>
 
-      <form onSubmit={handleCreateSession} className="flex flex-col gap-3 w-full max-w-sm">   
+      <form onSubmit={handleCreateSession} className="flex flex-col gap-3 w-full max-w-sm">
         <input
           type="text"
           placeholder="Thème de la session (ex: road trip de nuit)"
@@ -53,7 +53,7 @@ function Home() {
         <button
           type="submit"
           disabled={creating}
-          className="bg-white text-black px-6 py-2 rounded-full font-bold disabled:opacity-50"
+          className="bg-[#1DB954] text-black px-6 py-2 rounded-full font-bold cursor-pointer hover:bg-[#1ed760] transition disabled:opacity-50"
         >
           {creating ? 'Création...' : 'Créer une session'}
         </button>
@@ -61,7 +61,7 @@ function Home() {
 
       {error && <p className="text-red-500 text-sm">{error}</p>}
 
-      <button onClick={logout} className="text-gray-400 underline">
+      <button onClick={logout} className="text-gray-400 underline cursor-pointer hover:text-gray-200 transition">
         Se déconnecter
       </button>
     </div>
