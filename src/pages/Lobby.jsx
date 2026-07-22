@@ -40,6 +40,7 @@ function Lobby() {
         pseudo: session.user.user_metadata.full_name,
         spotify_id: spotifyId,
         user_id: session.user.id,
+        avatar_url: session.user.user_metadata.avatar_url || session.user.user_metadata.picture || null,
       })
 
       const { data: monJoueur } = await supabase
@@ -71,13 +72,20 @@ function Lobby() {
     if (session) init()
 
     const channelJoueurs = supabase
-      .channel(`joueurs-session-${sessionId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
-        (payload) => setJoueurs((prev) => [...prev, payload.new])
-      )
-      .subscribe()
+  .channel(`joueurs-session-${sessionId}`)
+  .on(
+    'postgres_changes',
+    { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
+    (payload) => {
+      setJoueurs((prev) => {
+        // On ignore si ce joueur est déjà dans la liste (évite les doublons visuels)
+        const dejaPresent = prev.some((j) => j.id === payload.new.id)
+        if (dejaPresent) return prev
+        return [...prev, payload.new]
+      })
+    }
+  )
+  .subscribe()
 
     const channelSession = supabase
       .channel(`session-${sessionId}`)
@@ -110,8 +118,6 @@ function Lobby() {
     }
   }, [sessionData?.status, sessionId])
 
-  // Phase reveal : on peut enfin lire "ajoute_par" grâce à la policy RLS,
-  // et on calcule les scores de chacun
   useEffect(() => {
     async function chargerReveal() {
       const { data: morceaux } = await supabase
@@ -124,14 +130,12 @@ function Lobby() {
         .select('*')
         .in('morceau_id', (morceaux || []).map((m) => m.id))
 
-      // Associe chaque morceau à son vrai auteur (pseudo) + tous les votes reçus
       const detaille = (morceaux || []).map((m) => ({
         ...m,
         votesPourCeMorceau: (votes || []).filter((v) => v.morceau_id === m.id),
       }))
       setResultatsReveal(detaille)
 
-      // Calcule le score de chaque joueur : nombre de bonnes devinettes
       const scoreParJoueur = {}
       joueurs.forEach((j) => { scoreParJoueur[j.id] = 0 })
 
@@ -240,11 +244,26 @@ function Lobby() {
       <p className="text-gray-400 text-sm">Thème : {sessionData.theme}</p>
       <p className="text-gray-400 text-sm">Statut : {sessionData.status}</p>
 
-      <div className="flex flex-col gap-2 mt-4">
+      <div className="flex flex-col items-center gap-2 mt-4">
         <h2 className="text-lg">Joueurs présents :</h2>
-        {joueurs.map((j) => (
-          <p key={j.id}>{j.pseudo}</p>
-        ))}
+        <div className="flex flex-wrap justify-center gap-4">
+          {joueurs.map((j) => (
+            <div key={j.id} className="flex flex-col items-center gap-1 w-16">
+              {j.avatar_url ? (
+                <img
+                  src={j.avatar_url}
+                  alt={j.pseudo}
+                  className="w-14 h-14 rounded-full object-cover border-2 border-gray-700"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center text-lg font-bold">
+                  {j.pseudo?.[0]?.toUpperCase() || '?'}
+                </div>
+              )}
+              <span className="text-xs text-gray-300 text-center truncate w-full">{j.pseudo}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {estCreateur && sessionData.status === 'lobby' && (
@@ -264,7 +283,7 @@ function Lobby() {
 
           {limiteAtteinte ? (
             <p className="text-center text-green-400 font-bold">
-              Limite atteinte, tu ne peux plus ajouter de morceaux 🎉
+              Limite atteinte, tu ne peux plus ajouter de morceaux
             </p>
           ) : (
             <>
@@ -318,7 +337,7 @@ function Lobby() {
 
       {sessionData.status === 'voting' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-4">
-          <h2 className="text-lg text-center">Devine qui a ajouté quoi 🕵️</h2>
+          <h2 className="text-lg text-center">Devine qui a ajouté quoi</h2>
 
           {morceauxVote.map((m) => (
             <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg flex flex-col gap-2">
@@ -350,7 +369,7 @@ function Lobby() {
       {sessionData.status === 'reveal' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-6">
           <div>
-            <h2 className="text-lg text-center mb-3">🏆 Classement</h2>
+            <h2 className="text-lg text-center mb-3">Classement</h2>
             {scores.map((s, i) => (
               <p key={s.pseudo} className="text-center">
                 {i + 1}. {s.pseudo} — {s.score} point{s.score > 1 ? 's' : ''}
@@ -359,7 +378,7 @@ function Lobby() {
           </div>
 
           <div className="flex flex-col gap-3">
-            <h2 className="text-lg text-center">Qui a ajouté quoi 🎉</h2>
+            <h2 className="text-lg text-center">Qui a ajouté quoi</h2>
             {resultatsReveal.map((m) => (
               <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg">
                 <p>{m.titre} — {m.artiste}</p>
@@ -370,7 +389,7 @@ function Lobby() {
         </div>
       )}
 
-      <button className="text-gray-400 underline cursor-pointer hover:text-gray-200 transition mt-4">
+      <button className="text-gray-400 underline cursor-pointer hover:text-gray-200 transition mt-8">
         Se déconnecter
       </button>
     </div>
