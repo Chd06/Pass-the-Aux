@@ -1,16 +1,51 @@
-# React + Vite
+# 🎧 Pass the Aux
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A real-time, collaborative playlist game built with React and Supabase — players anonymously add tracks to a shared session, then try to guess who added what before the big reveal.
 
-Currently, two official plugins are available:
+**Live demo:** [pass-the-aux.vercel.app](#) *(replace with your deployed link)*
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## Why this project
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+I built this as a solo full-stack project to go deep on real-time systems, authentication, and API constraints — not just another CRUD app. Every technical decision below was a deliberate problem to solve, not a tutorial to follow.
 
-## Expanding the ESLint configuration
+## Tech Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+`React` `Vite` `Tailwind CSS` `Supabase (Postgres + Auth + Realtime)` `Spotify Web API` `Row Level Security`
+
+## Key Technical Challenges
+
+- **Real anonymity, enforced by the database, not the UI.** Track submitters are hidden during voting through Postgres Row Level Security policies — not by simply omitting a field in the frontend. Even a malicious API call can't leak who added what before the reveal phase.
+- **Real-time multiplayer sync.** Player joins, session state changes, and votes propagate instantly across all connected clients via Supabase Realtime (WebSocket-based Postgres change subscriptions) — no polling, no manual refresh.
+- **OAuth token lifecycle management.** Spotify access tokens expire after ~1 hour; I built a custom persistence layer on top of Supabase Auth to capture and reuse the provider token for direct Spotify Web API calls (search, playback previews).
+- **Built around a platform constraint, not despite it.** Spotify's 2026 Developer Mode caps apps at 5 authorized users — I designed the game session model (small private friend groups) to make that limit invisible to the product experience instead of fighting it.
+- **Race condition handling with database-level constraints.** Duplicate player joins and duplicate votes are prevented with Postgres unique constraints, not fragile client-side checks — the database is the single source of truth.
+
+## Features
+
+- Spotify OAuth login
+- Create/join sessions via shareable link
+- Real-time lobby with player avatars
+- Track search & submission (Spotify Web API)
+- Anonymous voting phase with live audio previews
+- Reveal phase with scoring and leaderboard
+
+## Run locally
+
+```bash
+git clone https://github.com/Chd06/Pass-the-Aux.git
+cd Pass-the-Aux
+npm install
+```
+
+Create a `.env` file with your own Supabase project credentials:
+
+```
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+```bash
+npm run dev
+```
