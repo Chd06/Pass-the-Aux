@@ -1,28 +1,48 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../AuthContext'
 import { supabase } from '../supabaseClient'
+import { Search, Play, Pause, Copy, Check } from 'lucide-react'
 
+// Nombre maximum de morceaux qu'un joueur peut ajouter
 const MAX_MORCEAUX_PAR_JOUEUR = 3
 
 function Lobby() {
+  // sessionId vient de l'URL (/session/xxxxx)
   const { sessionId } = useParams()
   const { session } = useAuth()
+
+  // --- États liés à la session et aux joueurs ---
   const [joueurs, setJoueurs] = useState([])
   const [sessionData, setSessionData] = useState(null)
   const [monJoueurId, setMonJoueurId] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // --- États liés à la recherche/ajout de morceaux ---
   const [recherche, setRecherche] = useState('')
   const [resultats, setResultats] = useState([])
   const [mesMorceaux, setMesMorceaux] = useState([])
 
+  // --- États liés au vote ---
   const [morceauxVote, setMorceauxVote] = useState([])
   const [mesVotes, setMesVotes] = useState({})
 
+  // --- États liés au reveal (résultats finaux) ---
   const [resultatsReveal, setResultatsReveal] = useState([])
   const [scores, setScores] = useState([])
 
+  // --- États liés à la lecture audio des extraits ---
+  const [lectureEnCours, setLectureEnCours] = useState(null)
+  const audioRef = useRef(null)
+
+  // --- États liés au bouton "copier" (code et lien) ---
+  const [codeCopie, setCodeCopie] = useState(false)
+  const [lienCopie, setLienCopie] = useState(false)
+
+  // ============================================================
+  // Chargement initial : infos de la session, ajout du joueur,
+  // liste des joueurs, mes morceaux déjà ajoutés
+  // ============================================================
   useEffect(() => {
     async function init() {
       const { data: sessionInfo } = await supabase
@@ -35,6 +55,8 @@ function Lobby() {
 
       const spotifyId = session.user.user_metadata.provider_id
 
+      // On tente d'ajouter ce joueur à la session (ignoré si déjà présent,
+      // grâce à la contrainte unique en base de données)
       await supabase.from('joueurs').insert({
         session_id: sessionId,
         pseudo: session.user.user_metadata.full_name,
@@ -43,6 +65,8 @@ function Lobby() {
         avatar_url: session.user.user_metadata.avatar_url || session.user.user_metadata.picture || null,
       })
 
+      // On récupère l'ID de CE joueur précis (qu'il vienne d'être créé
+      // ou qu'il existait déjà)
       const { data: monJoueur } = await supabase
         .from('joueurs')
         .select('id')
@@ -52,6 +76,7 @@ function Lobby() {
 
       setMonJoueurId(monJoueur?.id || null)
 
+      // Liste complète des joueurs de cette session
       const { data: liste } = await supabase
         .from('joueurs')
         .select('*')
@@ -59,6 +84,7 @@ function Lobby() {
 
       setJoueurs(liste || [])
 
+      // Les morceaux que MOI j'ai déjà ajoutés
       const { data: morceaux } = await supabase
         .from('morceaux')
         .select('*')
@@ -71,22 +97,25 @@ function Lobby() {
 
     if (session) init()
 
+    // Abonnement temps réel : un nouveau joueur rejoint
     const channelJoueurs = supabase
-  .channel(`joueurs-session-${sessionId}`)
-  .on(
-    'postgres_changes',
-    { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
-    (payload) => {
-      setJoueurs((prev) => {
-        // On ignore si ce joueur est déjà dans la liste (évite les doublons visuels)
-        const dejaPresent = prev.some((j) => j.id === payload.new.id)
-        if (dejaPresent) return prev
-        return [...prev, payload.new]
-      })
-    }
-  )
-  .subscribe()
+      .channel(`joueurs-session-${sessionId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'joueurs', filter: `session_id=eq.${sessionId}` },
+        (payload) => {
+          setJoueurs((prev) => {
+            // On évite d'ajouter deux fois le même joueur
+            const dejaPresent = prev.some((j) => j.id === payload.new.id)
+            if (dejaPresent) return prev
+            return [...prev, payload.new]
+          })
+        }
+      )
+      .subscribe()
 
+    // Abonnement temps réel : la session change de statut
+    // (lobby -> collecting -> voting -> reveal)
     const channelSession = supabase
       .channel(`session-${sessionId}`)
       .on(
@@ -96,17 +125,23 @@ function Lobby() {
       )
       .subscribe()
 
+    // Nettoyage : on se désabonne quand on quitte la page
     return () => {
       supabase.removeChannel(channelJoueurs)
       supabase.removeChannel(channelSession)
     }
   }, [sessionId, session])
 
+  // ============================================================
+  // Quand la session passe en phase "voting" : on charge les
+  // morceaux à deviner, dans un ordre mélangé, SANS révéler
+  // qui les a ajoutés (colonne "ajoute_par" jamais demandée ici)
+  // ============================================================
   useEffect(() => {
     async function chargerMorceauxPourVote() {
       const { data } = await supabase
         .from('morceaux')
-        .select('id, titre, artiste, spotify_track_id')
+        .select('id, titre, artiste, spotify_track_id, pochette_url')
         .eq('session_id', sessionId)
 
       const melanges = [...(data || [])].sort(() => Math.random() - 0.5)
@@ -118,11 +153,15 @@ function Lobby() {
     }
   }, [sessionData?.status, sessionId])
 
+  // ============================================================
+  // Quand la session passe en phase "reveal" : on peut enfin lire
+  // qui a ajouté chaque morceau, et on calcule les scores
+  // ============================================================
   useEffect(() => {
     async function chargerReveal() {
       const { data: morceaux } = await supabase
         .from('morceaux')
-        .select('id, titre, artiste, ajoute_par')
+        .select('id, titre, artiste, ajoute_par, pochette_url')
         .eq('session_id', sessionId)
 
       const { data: votes } = await supabase
@@ -136,6 +175,7 @@ function Lobby() {
       }))
       setResultatsReveal(detaille)
 
+      // Calcul du score : +1 point par bonne devinette
       const scoreParJoueur = {}
       joueurs.forEach((j) => { scoreParJoueur[j.id] = 0 })
 
@@ -158,6 +198,9 @@ function Lobby() {
     }
   }, [sessionData?.status, sessionId, joueurs])
 
+  // ============================================================
+  // Actions qui changent le statut de la session
+  // ============================================================
   const demarrerSession = async () => {
     await supabase.from('sessions').update({ status: 'collecting' }).eq('id', sessionId)
   }
@@ -170,6 +213,9 @@ function Lobby() {
     await supabase.from('sessions').update({ status: 'reveal' }).eq('id', sessionId)
   }
 
+  // ============================================================
+  // Recherche de morceaux sur Spotify
+  // ============================================================
   const rechercherMorceaux = async (e) => {
     e.preventDefault()
     if (!recherche.trim()) return
@@ -184,9 +230,14 @@ function Lobby() {
     setResultats(data.tracks?.items || [])
   }
 
+  // ============================================================
+  // Ajout d'un morceau à MA liste pour cette session
+  // ============================================================
   const ajouterMorceau = async (track) => {
     if (!monJoueurId) return
     if (mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR) return
+
+    const pochette = track.album?.images?.[1]?.url || track.album?.images?.[0]?.url || null
 
     const { data, error } = await supabase
       .from('morceaux')
@@ -196,6 +247,7 @@ function Lobby() {
         spotify_track_id: track.id,
         titre: track.name,
         artiste: track.artists.map((a) => a.name).join(', '),
+        pochette_url: pochette,
       })
       .select()
       .single()
@@ -210,6 +262,9 @@ function Lobby() {
     setRecherche('')
   }
 
+  // ============================================================
+  // Vote : deviner qui a ajouté un morceau donné
+  // ============================================================
   const voter = async (morceauId, suspectId) => {
     setMesVotes((prev) => ({ ...prev, [morceauId]: suspectId }))
 
@@ -229,21 +284,85 @@ function Lobby() {
     }
   }
 
+  // ============================================================
+  // Lecture / pause d'un extrait audio (30 secondes, via Spotify)
+  // ============================================================
+  const toggleLecture = (track) => {
+    if (!track.preview_url) return
+
+    if (lectureEnCours === track.id) {
+      audioRef.current?.pause()
+      setLectureEnCours(null)
+      return
+    }
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+    }
+
+    const audio = new Audio(track.preview_url)
+    audio.play()
+    audio.onended = () => setLectureEnCours(null)
+    audioRef.current = audio
+    setLectureEnCours(track.id)
+  }
+
+  // ============================================================
+  // Copier le code ou le lien de la session dans le presse-papier
+  // ============================================================
+  const copierCode = () => {
+    navigator.clipboard.writeText(sessionData.join_code)
+    setCodeCopie(true)
+    setTimeout(() => setCodeCopie(false), 2000)
+  }
+
+  const copierLien = () => {
+    navigator.clipboard.writeText(window.location.href)
+    setLienCopie(true)
+    setTimeout(() => setLienCopie(false), 2000)
+  }
+
+  // ============================================================
+  // Affichage pendant le chargement
+  // ============================================================
   if (loading || !sessionData) {
     return <div className="min-h-screen bg-black text-white flex items-center justify-center">Chargement...</div>
   }
 
   const estCreateur = session.user.id === sessionData.created_by
   const limiteAtteinte = mesMorceaux.length >= MAX_MORCEAUX_PAR_JOUEUR
-
   const pseudoDe = (joueurId) => joueurs.find((j) => j.id === joueurId)?.pseudo || '???'
 
+  // ============================================================
+  // Ce qui s'affiche réellement à l'écran (le "return" dont tu
+  // parlais : c'est simplement la partie visuelle de la page)
+  // ============================================================
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center gap-4 px-4 py-8">
       <h1 className="text-2xl font-bold">Lobby</h1>
       <p className="text-gray-400 text-sm">Thème : {sessionData.theme}</p>
       <p className="text-gray-400 text-sm">Statut : {sessionData.status}</p>
 
+      {/* Le code + lien à partager, uniquement visible tant qu'on est dans le lobby */}
+      {sessionData.status === 'lobby' && (
+        <div className="flex flex-col items-center gap-2 mt-2">
+          <div className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-full">
+            <span className="font-mono text-lg tracking-widest">{sessionData.join_code}</span>
+            <button onClick={copierCode} className="cursor-pointer hover:text-green-400 transition">
+              {codeCopie ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+          </div>
+          <button
+            onClick={copierLien}
+            className="text-sm text-gray-400 underline cursor-pointer hover:text-gray-200 transition flex items-center gap-1"
+          >
+            {lienCopie ? <Check size={14} /> : <Copy size={14} />}
+            {lienCopie ? 'Lien copié !' : 'Copier le lien'}
+          </button>
+        </div>
+      )}
+
+      {/* Liste des joueurs, sous forme d'avatars ronds */}
       <div className="flex flex-col items-center gap-2 mt-4">
         <h2 className="text-lg">Joueurs présents :</h2>
         <div className="flex flex-wrap justify-center gap-4">
@@ -266,6 +385,7 @@ function Lobby() {
         </div>
       </div>
 
+      {/* Bouton "Démarrer", visible uniquement pour le créateur, en phase lobby */}
       {estCreateur && sessionData.status === 'lobby' && (
         <button
           onClick={demarrerSession}
@@ -275,6 +395,7 @@ function Lobby() {
         </button>
       )}
 
+      {/* Phase "collecting" : recherche et ajout de morceaux */}
       {sessionData.status === 'collecting' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-3">
           <p className="text-sm text-gray-400 text-center">
@@ -297,30 +418,63 @@ function Lobby() {
                 />
                 <button
                   type="submit"
-                  className="bg-white text-black px-4 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition"
+                  className="bg-white text-black px-4 py-2 rounded-full font-bold cursor-pointer hover:bg-gray-200 transition flex items-center justify-center"
                 >
-                  🔍
+                  <Search size={18} />
                 </button>
               </form>
 
-              {resultats.map((track) => (
-                <div key={track.id} className="flex justify-between items-center bg-gray-800 px-4 py-2 rounded-lg">
-                  <span>{track.name} — {track.artists.map((a) => a.name).join(', ')}</span>
-                  <button
-                    onClick={() => ajouterMorceau(track)}
-                    className="bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-green-400 transition"
-                  >
-                    Ajouter
-                  </button>
-                </div>
-              ))}
+              {resultats.map((track) => {
+                const pochette = track.album?.images?.[2]?.url || track.album?.images?.[1]?.url
+                return (
+                  <div key={track.id} className="flex items-center gap-3 bg-gray-800 px-3 py-2 rounded-lg">
+                    {pochette ? (
+                      <img src={pochette} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-gray-700 flex-shrink-0" />
+                    )}
+
+                    <button
+                      onClick={() => toggleLecture(track)}
+                      disabled={!track.preview_url}
+                      className="flex-shrink-0 w-8 h-8 rounded-full bg-white text-black flex items-center justify-center cursor-pointer hover:bg-gray-200 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {lectureEnCours === track.id ? <Pause size={14} /> : <Play size={14} />}
+                    </button>
+
+                    <div className="flex-1 min-w-0">
+                      <p className="truncate text-sm">{track.name}</p>
+                      <p className="truncate text-xs text-gray-400">
+                        {track.artists.map((a) => a.name).join(', ')}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => ajouterMorceau(track)}
+                      className="flex-shrink-0 bg-green-500 text-black px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-green-400 transition"
+                    >
+                      Ajouter
+                    </button>
+                  </div>
+                )
+              })}
             </>
           )}
 
-          <div className="mt-4">
+          <div className="mt-4 flex flex-col gap-2">
             <h3 className="text-lg">Mes morceaux ajoutés :</h3>
             {mesMorceaux.map((m) => (
-              <p key={m.id} className="text-gray-300">{m.titre} — {m.artiste}</p>
+              <div key={m.id} className="flex items-center gap-3 bg-gray-800 px-3 py-2 rounded-lg">
+                {m.pochette_url ? (
+                  <img src={m.pochette_url} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                ) : (
+                  <div className="w-10 h-10 rounded bg-gray-700 flex-shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm">{m.titre}</p>
+                  <p className="truncate text-xs text-gray-400">{m.artiste}</p>
+                </div>
+              </div>
             ))}
           </div>
 
@@ -335,13 +489,21 @@ function Lobby() {
         </div>
       )}
 
+      {/* Phase "voting" : deviner qui a ajouté chaque morceau */}
       {sessionData.status === 'voting' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-4">
           <h2 className="text-lg text-center">Devine qui a ajouté quoi</h2>
 
           {morceauxVote.map((m) => (
             <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg flex flex-col gap-2">
-              <span>{m.titre} — {m.artiste}</span>
+              <div className="flex items-center gap-3">
+                {m.pochette_url ? (
+                  <img src={m.pochette_url} alt="" className="w-10 h-10 rounded object-cover" />
+                ) : (
+                  <div className="w-10 h-10 rounded bg-gray-700" />
+                )}
+                <span className="text-sm">{m.titre} — {m.artiste}</span>
+              </div>
               <select
                 value={mesVotes[m.id] || ''}
                 onChange={(e) => voter(m.id, e.target.value)}
@@ -366,6 +528,7 @@ function Lobby() {
         </div>
       )}
 
+      {/* Phase "reveal" : résultats finaux et classement */}
       {sessionData.status === 'reveal' && (
         <div className="w-full max-w-md mt-4 flex flex-col gap-6">
           <div>
@@ -380,9 +543,16 @@ function Lobby() {
           <div className="flex flex-col gap-3">
             <h2 className="text-lg text-center">Qui a ajouté quoi</h2>
             {resultatsReveal.map((m) => (
-              <div key={m.id} className="bg-gray-800 px-4 py-3 rounded-lg">
-                <p>{m.titre} — {m.artiste}</p>
-                <p className="text-green-400 font-bold">Ajouté par : {pseudoDe(m.ajoute_par)}</p>
+              <div key={m.id} className="flex items-center gap-3 bg-gray-800 px-4 py-3 rounded-lg">
+                {m.pochette_url ? (
+                  <img src={m.pochette_url} alt="" className="w-10 h-10 rounded object-cover" />
+                ) : (
+                  <div className="w-10 h-10 rounded bg-gray-700" />
+                )}
+                <div>
+                  <p className="text-sm">{m.titre} — {m.artiste}</p>
+                  <p className="text-green-400 font-bold text-sm">Ajouté par : {pseudoDe(m.ajoute_par)}</p>
+                </div>
               </div>
             ))}
           </div>
