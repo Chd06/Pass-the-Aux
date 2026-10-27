@@ -1,35 +1,69 @@
-# 🎧 Pass the Aux !
+# 🎧 Pass the Aux!
 
-A real-time, collaborative playlist game built with React and Supabase : players anonymously add tracks to a shared session, then try to guess who added what before the big reveal.
+**Pass the Aux** is a work-in-progress multiplayer music guessing game. Players join a private session, anonymously submit tracks, then try to guess **who submitted each song** before the reveal.
 
-**Live demo:** [pass-the-aux-kappa.vercel.app](#) 
+> **Status:** Early prototype — first four-player user test completed. Core multiplayer flows are being stabilized; this is not yet a polished public release.
 
----
+## Why I built it
 
-## Why this project
+I wanted to build a music-related application while learning more about full-stack development, authentication, third-party APIs, and real-time multiplayer state. This is a solo project, and the first user-testing session has helped me prioritize what to improve next.
 
-I built this as a solo full-stack project to go deep on real-time systems, authentication, and API constraints. Every technical decision below was a deliberate problem to solve, not a tutorial to follow. I wanted to build something related to music using Spotify as it's a plateform that I use regularly and I enjoy listening to music on a daily basis to. 
+## Tech stack
 
-## Tech Stack
+- **Frontend:** React, Vite, Tailwind CSS
+- **Backend / data:** Supabase (PostgreSQL, Auth, Realtime)
+- **Music integration:** Spotify Web API
+- **Access control:** PostgreSQL Row Level Security (RLS)
 
-`React` `Vite` `Tailwind CSS` `Supabase (Postgres + Auth + Realtime)` `Spotify Web API` `Row Level Security`
+## Gameplay (intended flow)
 
-## Key Technical Challenges
+1. Create a session and invite friends using a session code or link.
+2. Players join a lobby and submit songs for the round.
+3. During the guessing phase, players identify who submitted each track.
+4. Reveal the answers and show the results.
 
-- **Real anonymity, enforced by the database, not the UI.** Track submitters are hidden during voting through Postgres Row Level Security policies, not by simply omitting a field in the frontend. Even a malicious API call can't leak who added what before the reveal phase.
-- **Real-time multiplayer sync.** Player joins, session state changes, and votes propagate instantly across all connected clients via Supabase Realtime (WebSocket-based Postgres change subscriptions). No polling, no manual refresh.
-- **OAuth token lifecycle management.** Spotify access tokens expire after ~1 hour; I built a custom persistence layer on top of Supabase Auth to capture and reuse the provider token for direct Spotify Web API calls (search, playback previews).
-- **Built around a platform constraint, not despite it.** Spotify's 2026 Developer Mode caps apps at 5 authorized users. I designed the game session model (small private friend groups) to make that limit invisible to the product experience instead of fighting it.
-- **Race condition handling with database-level constraints.** Duplicate player joins and duplicate votes are prevented with Postgres unique constraints, not fragile client-side checks : the database is the single source of truth.
+Some of these steps are still being debugged. The description above explains the intended game, not a guarantee that every flow works end to end.
 
-## Features
+## What works in the current prototype
 
-- Spotify OAuth login
-- Create/join sessions via shareable link
-- Real-time lobby with player avatars
-- Track search & submission (Spotify Web API)
-- Anonymous voting phase with live audio previews
-- Reveal phase with scoring and leaderboard
+- Spotify-based sign-in and song search
+- Creating sessions and joining via a session code
+- Showing player names and profile pictures in the lobby, with real-time updates
+- Submitting tracks to a session
+
+## Known issues from the first user test
+
+- **Invitation link:** the copied session-specific invitation link can lead to a page-not-found error; entering the session code works. Sharing the application's base URL also works.
+- **Refresh / reconnect:** a guest may lose the session flow after refreshing the page.
+- **Guessing phase:** a player may only see the tracks they submitted, rather than all eligible tracks in the round.
+- **Audio previews:** listening to track previews is not working yet.
+
+These issues are being investigated; please do not rely on the current deployment for a full game.
+
+## Roadmap
+
+### Priority 0 — make the game playable end to end
+- [ ] Fix session invitation links and routing
+- [ ] Restore session state reliably after refresh
+- [ ] Correct the set of tracks shown during guessing
+
+### Priority 1 — improve the experience
+- [ ] Enable audio previews where supported by the Spotify API
+- [ ] Explain the rules before the game starts
+- [ ] Improve the UI and player feedback during each phase
+
+### Ideas to explore
+- [ ] Generate a playlist from the tracks submitted during a session
+- [ ] Test a one-by-one guessing flow instead of showing all tracks at once
+- [ ] Make invitation links shorter and easier to share
+
+## Engineering topics explored
+
+- Supabase Realtime for multiplayer presence and state updates
+- Spotify OAuth and API integration
+- PostgreSQL constraints and Row Level Security for data integrity and access control
+- Client-side session management and routing
+- User testing, bug triage, and iterative improvements
 
 ## Run locally
 
@@ -39,9 +73,9 @@ cd Pass-the-Aux
 npm install
 ```
 
-Create a `.env` file with your own Supabase project credentials:
+Create a `.env` file and supply your own Supabase project configuration:
 
-```
+```env
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
@@ -49,3 +83,13 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```bash
 npm run dev
 ```
+
+You will also need a compatible Supabase project and Spotify developer configuration for authentication and music-related features. Local setup is not fully documented yet.
+
+## Demo
+
+The deployed prototype is available at **https://pass-the-aux-kappa.vercel.app/**, but the multiplayer experience currently has known bugs. A stable playable demo will be shared after further fixes.
+
+---
+
+*Built as a learning project. Feedback and suggestions are welcome.*
